@@ -220,9 +220,12 @@ if menu == "1. Soạn thảo & Nhập Order":
                     for _, row in df_detail.iterrows():
                         code = str(row['Mã Bánh'])
                         qty = int(row['Số Lượng Order'])
-                        shelf_days = int(row['HSD Chuẩn']) if pd.notnull(row['HSD Chuẩn']) else 7
                         
-                        # Tính HSD = Ngày chọn nhập + HSD chuẩn của bánh
+                        # Lấy HSD chuẩn mới nhất từ bảng products
+                        c.execute("SELECT shelf_life_days FROM products WHERE code = ?", (code,))
+                        p_row = c.fetchone()
+                        shelf_days = p_row[0] if p_row else 7
+                        
                         expiry_date = user_selected_import_date + timedelta(days=shelf_days)
                         
                         c.execute('''
@@ -326,7 +329,7 @@ elif menu == "3. Nhập Kho Lô Mới":
     conn.close()
 
 # ---------------------------------------------------------
-# CHỨC NĂNG 4: QUẢN LÝ DANH MỤC BÁNH
+# CHỨC NĂNG 4: QUẢN LÝ DANH MỤC BÁNH (ĐÃ THÊM ĐỒNG BỘ CẬP NHẬT KHO)
 # ---------------------------------------------------------
 elif menu == "4. Quản lý Danh mục Bánh":
     st.header("⚙️ Danh Mục Bánh & Cấu Hình Hạn Sử Dụng Chuẩn")
@@ -352,13 +355,28 @@ elif menu == "4. Quản lý Danh mục Bánh":
     if c_btn1.button("💾 Lưu Thay Đổi", type="primary"):
         c = conn.cursor()
         for _, row in edited_products_df.iterrows():
+            code_val = str(row['Mã Bánh'])
+            name_val = str(row['Tên Bánh'])
+            price_val = float(row['Giá Sỉ'])
+            shelf_days_val = int(row['HSD Chuẩn (Ngày)'])
+            
+            # 1. Cập nhật bảng Danh mục bánh
             c.execute('''
                 UPDATE products 
                 SET name = ?, unit_price = ?, shelf_life_days = ?
                 WHERE code = ?
-            ''', (str(row['Tên Bánh']), float(row['Giá Sỉ']), int(row['HSD Chuẩn (Ngày)']), str(row['Mã Bánh'])))
+            ''', (name_val, price_val, shelf_days_val, code_val))
+            
+            # 2. ĐỒNG BỘ: Tính toán lại Expiry_date cho toàn bộ lô tồn kho của Mã Bánh này
+            c.execute("SELECT id, import_date FROM inventory_batches WHERE code = ? AND quantity > 0", (code_val,))
+            batches = c.fetchall()
+            for batch_id, import_date_str in batches:
+                imp_date = pd.to_datetime(import_date_str).date()
+                new_expiry_date = imp_date + timedelta(days=shelf_days_val)
+                c.execute("UPDATE inventory_batches SET expiry_date = ? WHERE id = ?", (new_expiry_date, batch_id))
+                
         conn.commit()
-        st.success("Đã cập nhật thành công các thông tin bánh!")
+        st.success("✅ Đã cập nhật Danh mục bánh và TỰ ĐỘNG ĐỒNG BỘ lại Hạn Sử Dụng của các lô trong kho!")
         st.rerun()
 
     st.markdown("---")
