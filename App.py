@@ -3,6 +3,7 @@ import pandas as pd
 import sqlite3
 from datetime import datetime, date, timedelta
 import os
+import io
 
 # Cấu hình trang Streamlit
 st.set_page_config(page_title="Mecake - Quản lý Kho & Order", layout="wide", page_icon="🧁")
@@ -86,70 +87,115 @@ menu = st.sidebar.radio(
 )
 
 # ---------------------------------------------------------
-# CHỨC NĂNG 1: SOẠN THẢO & NHẬP ORDER
+# CHỨC NĂNG 1: SOẠN THẢO & NHẬP ORDER + QUẢN LÝ ĐƠN ORDER
 # ---------------------------------------------------------
 if menu == "1. Soạn thảo & Nhập Order":
-    st.header("📋 Soạn Thảo & Nhập Số Lượng Order Bánh")
+    tab_create, tab_history = st.tabs(["📝 Soạn Thảo Order Mới", "📦 Lịch Sử Đơn Order Đã Chốt"])
     
     conn = sqlite3.connect(DB_FILE)
-    df_prod = pd.read_sql_query("SELECT code AS 'Mã Bánh', name AS 'Tên Bánh', unit_price AS 'Giá Sỉ (có VAT)' FROM products", conn)
     
-    # Tính tồn kho hiện tại cho từng mã
-    df_inv = pd.read_sql_query("SELECT code, SUM(quantity) as current_stock FROM inventory_batches WHERE quantity > 0 GROUP BY code", conn)
-    df_order_view = pd.merge(df_prod, df_inv, left_on='Mã Bánh', right_on='code', how='left').fillna({'current_stock': 0})
-    df_order_view['Tồn Kho'] = df_order_view['current_stock'].astype(int)
-    
-    col_date, col_search = st.columns([1, 2])
-    order_date = col_date.date_input("Ngày Order", date.today())
-    search_keyword = col_search.text_input("🔍 Tìm kiếm theo Mã Bánh hoặc Tên Bánh:", "")
-    
-    # Lọc danh sách theo từ khóa nếu có
-    if search_keyword:
-        mask = df_order_view['Mã Bánh'].str.contains(search_keyword, case=False, na=False) | \
-               df_order_view['Tên Bánh'].str.contains(search_keyword, case=False, na=False)
-        df_order_view = df_order_view[mask]
-    
-    st.subheader("Bảng nhập Số lượng Order:")
-    
-    df_order_view['Số Lượng Order'] = 0
-    display_cols = ['Mã Bánh', 'Tên Bánh', 'Giá Sỉ (có VAT)', 'Tồn Kho', 'Số Lượng Order']
-    
-    edited_df = st.data_editor(
-        df_order_view[display_cols],
-        column_config={
-            "Số Lượng Order": st.column_config.NumberColumn("Số Lượng Order", min_value=0, step=1, default=0),
-            "Giá Sỉ (có VAT)": st.column_config.NumberColumn("Giá Sỉ (VNĐ)", format="%d ₫"),
-            "Tồn Kho": st.column_config.NumberColumn("Tồn Kho", disabled=True)
-        },
-        disabled=["Mã Bánh", "Tên Bánh", "Giá Sỉ (có VAT)", "Tồn Kho"],
-        hide_index=True,
-        use_container_width=True,
-        key="order_editor"
-    )
-    
-    # Tính tổng giá trị đơn order
-    edited_df['Thành Tiền'] = edited_df['Số Lượng Order'] * edited_df['Giá Sỉ (có VAT)']
-    total_qty = edited_df['Số Lượng Order'].sum()
-    total_val = edited_df['Thành Tiền'].sum()
-    
-    c_res1, c_res2 = st.columns(2)
-    c_res1.metric("Tổng Số Lượng Order", f"{total_qty} cái")
-    c_res2.metric("Tổng Giá Trị Đơn Hàng", f"{total_val:,.0f} VNĐ")
-    
-    if st.button("💾 Lưu & Chốt Đơn Order này", type="primary"):
-        c = conn.cursor()
-        orders_to_save = edited_df[edited_df['Số Lượng Order'] > 0]
-        if not orders_to_save.empty:
-            for _, row in orders_to_save.iterrows():
-                c.execute('''
-                    INSERT INTO order_records (order_date, code, order_qty, note)
-                    VALUES (?, ?, ?, ?)
-                ''', (order_date, row['Mã Bánh'], int(row['Số Lượng Order']), 'Order hàng'))
-            conn.commit()
-            st.success(f"Đã lưu thành công đơn Order ngày {order_date} với {len(orders_to_save)} mã bánh!")
+    # TAB 1: SOẠN THẢO
+    with tab_create:
+        st.header("📋 Soạn Thảo & Nhập Số Lượng Order Bánh")
+        
+        df_prod = pd.read_sql_query("SELECT code AS 'Mã Bánh', name AS 'Tên Bánh', unit_price AS 'Giá Sỉ (có VAT)' FROM products", conn)
+        df_inv = pd.read_sql_query("SELECT code, SUM(quantity) as current_stock FROM inventory_batches WHERE quantity > 0 GROUP BY code", conn)
+        df_order_view = pd.merge(df_prod, df_inv, left_on='Mã Bánh', right_on='code', how='left').fillna({'current_stock': 0})
+        df_order_view['Tồn Kho'] = df_order_view['current_stock'].astype(int)
+        
+        col_date, col_search = st.columns([1, 2])
+        order_date = col_date.date_input("Ngày Order", date.today(), key="order_date_input")
+        search_keyword = col_search.text_input("🔍 Tìm kiếm theo Mã Bánh hoặc Tên Bánh:", "", key="search_order")
+        
+        if search_keyword:
+            mask = df_order_view['Mã Bánh'].str.contains(search_keyword, case=False, na=False) | \
+                   df_order_view['Tên Bánh'].str.contains(search_keyword, case=False, na=False)
+            df_order_view = df_order_view[mask]
+        
+        df_order_view['Số Lượng Order'] = 0
+        display_cols = ['Mã Bánh', 'Tên Bánh', 'Giá Sỉ (có VAT)', 'Tồn Kho', 'Số Lượng Order']
+        
+        edited_df = st.data_editor(
+            df_order_view[display_cols],
+            column_config={
+                "Số Lượng Order": st.column_config.NumberColumn("Số Lượng Order", min_value=0, step=1, default=0),
+                "Giá Sỉ (có VAT)": st.column_config.NumberColumn("Giá Sỉ (VNĐ)", format="%d ₫"),
+                "Tồn Kho": st.column_config.NumberColumn("Tồn Kho", disabled=True)
+            },
+            disabled=["Mã Bánh", "Tên Bánh", "Giá Sỉ (có VAT)", "Tồn Kho"],
+            hide_index=True,
+            use_container_width=True,
+            key="order_editor"
+        )
+        
+        edited_df['Thành Tiền'] = edited_df['Số Lượng Order'] * edited_df['Giá Sỉ (có VAT)']
+        total_qty = edited_df['Số Lượng Order'].sum()
+        total_val = edited_df['Thành Tiền'].sum()
+        
+        c_res1, c_res2 = st.columns(2)
+        c_res1.metric("Tổng Số Lượng Order", f"{total_qty} cái")
+        c_res2.metric("Tổng Giá Trị Đơn Hàng", f"{total_val:,.0f} VNĐ")
+        
+        if st.button("💾 Lưu & Chốt Đơn Order này", type="primary"):
+            c = conn.cursor()
+            orders_to_save = edited_df[edited_df['Số Lượng Order'] > 0]
+            if not orders_to_save.empty:
+                # Xóa đơn trùng ngày nếu có để cập nhật mới
+                c.execute("DELETE FROM order_records WHERE order_date = ?", (order_date,))
+                for _, row in orders_to_save.iterrows():
+                    c.execute('''
+                        INSERT INTO order_records (order_date, code, order_qty, note)
+                        VALUES (?, ?, ?, ?)
+                    ''', (order_date, row['Mã Bánh'], int(row['Số Lượng Order']), 'Order hàng'))
+                conn.commit()
+                st.success(f"✅ Đã lưu thành công đơn Order ngày {order_date}! Chuyển sang Tab 'Lịch Sử Đơn Order Đã Chốt' để xem và tải về.")
+            else:
+                st.warning("Vui lòng nhập số lượng Order (> 0) cho ít nhất 1 loại bánh!")
+
+    # TAB 2: LỊCH SỬ VÀ XUẤT ĐƠN ORDER
+    with tab_history:
+        st.header("📦 Quản Lý & Xuất Danh Sách Đơn Order")
+        
+        df_all_dates = pd.read_sql_query("SELECT DISTINCT order_date FROM order_records ORDER BY order_date DESC", conn)
+        
+        if df_all_dates.empty:
+            st.info("Chưa có đơn order nào được chốt trong hệ thống.")
         else:
-            st.warning("Vui lòng nhập số lượng Order (> 0) cho ít nhất 1 loại bánh!")
-    
+            selected_date = st.selectbox("Chọn ngày đã chốt Order để xem:", df_all_dates['order_date'].tolist())
+            
+            query_detail = '''
+                SELECT 
+                    o.code AS 'Mã Bánh',
+                    p.name AS 'Tên Bánh',
+                    p.unit_price AS 'Giá Sỉ',
+                    o.order_qty AS 'Số Lượng Order',
+                    (p.unit_price * o.order_qty) AS 'Thành Tiền'
+                FROM order_records o
+                JOIN products p ON o.code = p.code
+                WHERE o.order_date = ? AND o.order_qty > 0
+            '''
+            df_detail = pd.read_sql_query(query_detail, conn, params=(selected_date,))
+            
+            st.subheader(f"Danh sách Bánh Order cho ngày: {selected_date}")
+            st.dataframe(df_detail, use_container_width=True, hide_index=True)
+            
+            sum_qty = df_detail['Số Lượng Order'].sum()
+            sum_money = df_detail['Thành Tiền'].sum()
+            st.markdown(f"**Tổng cộng:** **{sum_qty}** cái | **Tổng tiền:** **{sum_money:,.0f} VNĐ**")
+            
+            # Xuất file Excel đơn order
+            buffer = io.BytesIO()
+            with pd.ExcelWriter(buffer, engine='openpyxl') as writer:
+                df_detail.to_excel(writer, index=False, sheet_name='Don_Order')
+            
+            st.download_button(
+                label="📥 Tải file Excel Đơn Order này về máy",
+                data=buffer.getvalue(),
+                file_name=f"Don_Order_Mecake_{selected_date}.xlsx",
+                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                type="primary"
+            )
+
     conn.close()
 
 # ---------------------------------------------------------
@@ -242,7 +288,7 @@ elif menu == "3. Nhập Kho Lô Mới":
     conn.close()
 
 # ---------------------------------------------------------
-# CHỨC NĂNG 4: QUẢN LÝ DANH MỤC BÁNH (CÓ SỬA TRỰC TIẾP & XÓA)
+# CHỨC NĂNG 4: QUẢN LÝ DANH MỤC BÁNH
 # ---------------------------------------------------------
 elif menu == "4. Quản lý Danh mục Bánh":
     st.header("⚙️ Danh Mục Bánh & Cấu Hình Hạn Sử Dụng Chuẩn")
@@ -251,11 +297,10 @@ elif menu == "4. Quản lý Danh mục Bánh":
     conn = sqlite3.connect(DB_FILE)
     df_p = pd.read_sql_query("SELECT code AS 'Mã Bánh', name AS 'Tên Bánh', unit_price AS 'Giá Sỉ', shelf_life_days AS 'HSD Chuẩn (Ngày)' FROM products", conn)
     
-    # Bảng cho phép chỉnh sửa dữ liệu trực tiếp
     edited_products_df = st.data_editor(
         df_p,
         column_config={
-            "Mã Bánh": st.column_config.TextColumn("Mã Bánh", disabled=True), # Khóa mã bánh làm khóa chính
+            "Mã Bánh": st.column_config.TextColumn("Mã Bánh", disabled=True),
             "Tên Bánh": st.column_config.TextColumn("Tên Bánh", required=True),
             "Giá Sỉ": st.column_config.NumberColumn("Giá Sỉ (VNĐ)", format="%d ₫", min_value=0),
             "HSD Chuẩn (Ngày)": st.column_config.NumberColumn("HSD Chuẩn (Ngày)", min_value=1, step=1)
@@ -280,7 +325,6 @@ elif menu == "4. Quản lý Danh mục Bánh":
 
     st.markdown("---")
     
-    # Khối Xóa mã bánh & Thêm mã bánh mới
     col_add, col_del = st.columns(2)
     
     with col_add:
@@ -301,7 +345,7 @@ elif menu == "4. Quản lý Danh mục Bánh":
                     st.warning("Vui lòng điền đầy đủ Mã Bánh và Tên Bánh!")
                     
     with col_del:
-        with st.expander("🗑️️ Xóa Bỏ Mã Bánh Không Còn Tồn Tại"):
+        with st.expander("🗑 Xóa Bỏ Mã Bánh Không Còn Tồn Tại"):
             list_codes = df_p['Mã Bánh'].tolist()
             if list_codes:
                 code_to_del = st.selectbox("Chọn Mã bánh cần xóa:", list_codes)
