@@ -44,7 +44,6 @@ def init_db():
             note TEXT
         )
     ''')
-    # Bảng ghi nhận Kho Hàng Hủy
     c.execute('''
         CREATE TABLE IF NOT EXISTS discarded_goods (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -250,7 +249,7 @@ if menu == "1. Soạn thảo & Nhập Order":
     conn.close()
 
 # ---------------------------------------------------------
-# CHỨC NĂNG 2: BÁO CÁO TỒN KHO & CẢNH BÁO CẬN DATE / HỦY HÀNG
+# CHỨC NĂNG 2: BÁO CÁO TỒN KHO & CẢNH BÁO CẬN DATE / HỦY HÀNG (DẠNG BẢNG GỌN)
 # ---------------------------------------------------------
 elif menu == "2. Báo cáo Tồn Kho & Hạn Sử Dụng":
     tab_inv, tab_discard = st.tabs(["⏳ Tồn Kho & Cảnh Báo HSD", "🗑️ Kho Hàng Hủy & Báo Cáo Lãng Phí"])
@@ -264,7 +263,7 @@ elif menu == "2. Báo cáo Tồn Kho & Hạn Sử Dụng":
         with st.expander("⚙️ CẤU HÌNH NGƯỠNG CẢNH BÁO & KHUYẾN CÁO BÁN HÀNG", expanded=False):
             c_cfg1, c_cfg2 = st.columns([1, 2])
             warn_days = c_cfg1.number_input("Cảnh báo cận Date khi số ngày còn lại ≤ (ngày):", min_value=1, value=2, step=1)
-            discount_policy = c_cfg2.text_input("Nội dung Khuyến cáo bán hàng (Chiết khấu):", "Giảm giá 30% - 50% hoặc Tặng kèm Combo để giải phóng hàng")
+            discount_policy = c_cfg2.text_input("Nội dung Khuyến cáo bán hàng (Chiết khấu):", "Giảm giá 30% - 50% hoặc Tặng kèm Combo")
         
         query = '''
             SELECT 
@@ -297,7 +296,16 @@ elif menu == "2. Báo cáo Tồn Kho & Hạn Sử Dụng":
                 else:
                     return "🟢 An Toàn"
                     
+            def set_recommendation(days):
+                if days < 0:
+                    return "🔴 Cần bấm Hủy lô bánh"
+                elif days <= warn_days:
+                    return f"⚠️ {discount_policy}"
+                else:
+                    return "Bán bình thường"
+
             df_batches['Trạng Thái'] = df_batches['Số Ngày Còn Lại'].apply(set_status)
+            df_batches['Khuyến Cáo Bán Hàng'] = df_batches['Số Ngày Còn Lại'].apply(set_recommendation)
             
             expired_df = df_batches[df_batches['Số Ngày Còn Lại'] < 0]
             warning_df = df_batches[(df_batches['Số Ngày Còn Lại'] >= 0) & (df_batches['Số Ngày Còn Lại'] <= warn_days)]
@@ -308,45 +316,39 @@ elif menu == "2. Báo cáo Tồn Kho & Hạn Sử Dụng":
             c2.metric(f"🟡 Lô Cận Date (≤{warn_days} ngày)", f"{len(warning_df)} lô")
             c3.metric("🔴 Lô Hết Hạn (Cần Hủy)", f"{len(expired_df)} lô")
             
-            # Khuyến cáo bán hàng nếu có hàng cận Date
             if not warning_df.empty:
                 st.warning(f"⚠️ **CẢNH BÁO BÁN HÀNG CẬN DATE:** Có {len(warning_df)} lô hàng cận HSD! 👉 **Khuyến cáo:** {discount_policy}")
             
             st.subheader("Chi tiết Tồn kho từng Lô bánh (Ưu tiên Lô gần hết hạn lên đầu):")
             
-            # Hiển thị danh sách các lô
-            for idx, row in df_batches.iterrows():
-                batch_id = row['ID Lô']
-                code = row['Mã Bánh']
-                name = row['Tên Bánh']
-                price = row['Giá Sỉ']
-                days_left = row['Số Ngày Còn Lại']
-                qty = row['Số Lượng Tồn']
-                status = row['Trạng Thái']
-                
-                # Định dạng màu dòng
-                if days_left < 0:
-                    st.error(f"🔴 **Lô #{batch_id} - [{code}] {name}** | Số lượng tồn: **{qty}** cái | HSD: {row['Hạn Sử Dụng']} (**Quá {abs(days_left)} ngày**) | Giá sỉ: {price:,.0f}₫")
+            # TRÌNH BÀY DẠNG BẢNG CHUẨN
+            disp_table = df_batches[['ID Lô', 'Mã Bánh', 'Tên Bánh', 'Ngày Nhập', 'Hạn Sử Dụng', 'Số Ngày Còn Lại', 'Số Lượng Tồn', 'Trạng Thái', 'Khuyến Cáo Bán Hàng']]
+            st.dataframe(disp_table, use_container_width=True, hide_index=True)
+            
+            # BẢNG THAO TÁC HỦY DÀNH RIÊNG CHO CÁC LÔ ĐÃ HẾT HẠN (< 0 NGÀY)
+            if not expired_df.empty:
+                st.markdown("---")
+                st.error("🚨 **KHỐI THAO TÁC HỦY BÁNH HẾT HẠN (SỐ NGÀY CÒN LẠI < 0):**")
+                for _, exp_row in expired_df.iterrows():
+                    b_id = exp_row['ID Lô']
+                    b_code = exp_row['Mã Bánh']
+                    b_name = exp_row['Tên Bánh']
+                    b_qty = exp_row['Số Lượng Tồn']
+                    b_price = exp_row['Giá Sỉ']
                     
-                    # NỔI NÚT HỦY BÁNH KHI HẾT HẠN
-                    c_act1, c_act2 = st.columns([1, 3])
-                    reason_inp = c_act2.text_input("Lý do hủy:", "Bánh quá hạn sử dụng", key=f"reason_{batch_id}")
-                    if c_act1.button(f"🗑️ HỦY LÔ BÁNH #{batch_id}", type="primary", key=f"btn_del_{batch_id}"):
+                    c_del1, c_del2, c_del3 = st.columns([2, 2, 1])
+                    c_del1.write(f"🔴 **Lô #{b_id}** - [{b_code}] {b_name} (Tồn: {b_qty} cái)")
+                    reason_val = c_del2.text_input("Lý do hủy:", "Quá hạn sử dụng", key=f"rec_reason_{b_id}")
+                    if c_del3.button(f"🗑️ Hủy Lô #{b_id}", type="primary", key=f"btn_del_tab_{b_id}"):
                         c = conn.cursor()
-                        # 1. Trừ tồn kho về 0
-                        c.execute("UPDATE inventory_batches SET quantity = 0 WHERE id = ?", (batch_id,))
-                        # 2. Ghi nhận vào Kho hàng hủy
+                        c.execute("UPDATE inventory_batches SET quantity = 0 WHERE id = ?", (b_id,))
                         c.execute('''
                             INSERT INTO discarded_goods (batch_id, code, discard_date, quantity, unit_price, reason)
                             VALUES (?, ?, ?, ?, ?, ?)
-                        ''', (batch_id, code, date.today(), qty, price, reason_inp))
+                        ''', (b_id, b_code, date.today(), b_qty, b_price, reason_val))
                         conn.commit()
-                        st.success(f"✅ Đã hủy {qty} bánh mã {code} và chuyển số liệu sang Kho Hàng Hủy!")
+                        st.success(f"✅ Đã hủy {b_qty} bánh lô #{b_id} và chuyển vào Kho Hàng Hủy!")
                         st.rerun()
-                elif days_left <= warn_days:
-                    st.warning(f"🟡 **Lô #{batch_id} - [{code}] {name}** | Số lượng tồn: **{qty}** cái | Còn **{days_left} ngày HSD** | 👉 **Khuyến cáo:** {discount_policy}")
-                else:
-                    st.success(f"🟢 **Lô #{batch_id} - [{code}] {name}** | Số lượng tồn: **{qty}** cái | Còn **{days_left} ngày HSD**")
 
     # TAB KHO HÀNG HỦY
     with tab_discard:
@@ -381,7 +383,6 @@ elif menu == "2. Báo cáo Tồn Kho & Hạn Sử Dụng":
             st.subheader("Chi tiết Danh sách Bánh Đã Hủy:")
             st.dataframe(df_dis, use_container_width=True, hide_index=True)
             
-            # Nút tải báo cáo hủy
             buffer_dis = io.BytesIO()
             with pd.ExcelWriter(buffer_dis, engine='openpyxl') as writer:
                 df_dis.to_excel(writer, index=False, sheet_name='Hang_Huy')
