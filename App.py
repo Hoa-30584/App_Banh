@@ -151,7 +151,7 @@ if menu == "1. Soạn thảo & Nhập Order":
             else:
                 st.warning("Vui lòng nhập số lượng Order (> 0) cho ít nhất 1 loại bánh!")
 
-    # TAB 2: LỊCH SỬ, XUẤT FILE VÀ XÓA ĐƠN ORDER
+    # TAB 2: LỊCH SỬ, XUẤT FILE VÀ CHUYỂN KHO CHỌN NGÀY
     with tab_history:
         st.header("📦 Quản Lý, Xuất & Xóa Đơn Order")
         
@@ -184,7 +184,7 @@ if menu == "1. Soạn thảo & Nhập Order":
             st.markdown(f"**Tổng cộng:** **{sum_qty}** cái | **Tổng tiền:** **{sum_money:,.0f} VNĐ**")
             
             st.markdown("---")
-            col_dl, col_import, col_delete = st.columns(3)
+            col_dl, col_del = st.columns(2)
             
             # 1. Tải file Excel
             buffer = io.BytesIO()
@@ -200,34 +200,39 @@ if menu == "1. Soạn thảo & Nhập Order":
                 use_container_width=True
             )
             
-            # 2. Chuyển thành Lô Nhập Kho (Sửa chuẩn lấy Ngày Order được chọn)
-            if col_import.button("🚚 CHUYỂN THÀNH LÔ NHẬP KHO", type="secondary", use_container_width=True):
-                c = conn.cursor()
-                # Ép kiểu chuỗi ngày order về dạng datetime.date chuẩn
-                selected_import_date = pd.to_datetime(selected_date_str).date()
-                count_imported = 0
-                for _, row in df_detail.iterrows():
-                    code = str(row['Mã Bánh'])
-                    qty = int(row['Số Lượng Order'])
-                    shelf_days = int(row['HSD Chuẩn']) if pd.notnull(row['HSD Chuẩn']) else 7
-                    expiry_date = selected_import_date + timedelta(days=shelf_days)
-                    
-                    c.execute('''
-                        INSERT INTO inventory_batches (code, import_date, expiry_date, quantity)
-                        VALUES (?, ?, ?, ?)
-                    ''', (code, selected_import_date, expiry_date, qty))
-                    count_imported += 1
-                conn.commit()
-                st.success(f"🎉 Đã chuyển toàn bộ {count_imported} mã bánh từ Đơn Order ngày {selected_date_str} thành Lô Nhập Kho đúng Ngày Nhập {selected_date_str}!")
-                st.info("💡 Bạn có thể kiểm tra tồn kho & HSD ở mục '2. Báo cáo Tồn Kho & Hạn Sử Dụng'.")
-
-            # 3. Xóa Đơn Order bị sai
-            if col_delete.button("🗑️️ XÓA HOÀN TOÀN ĐƠN ORDER NÀY", type="primary", use_container_width=True):
+            # 2. Xóa Đơn Order bị sai
+            if col_del.button("🗑️ XÓA HOÀN TOÀN ĐƠN ORDER NÀY", type="secondary", use_container_width=True):
                 c = conn.cursor()
                 c.execute("DELETE FROM order_records WHERE order_date = ?", (selected_date_str,))
                 conn.commit()
                 st.success(f"🗑️ Đã xóa hoàn toàn dữ liệu đơn Order ngày {selected_date_str}!")
                 st.rerun()
+
+            st.markdown("---")
+            # KHỐI CHUYỂN ĐƠN ORDER THÀNH KHO - CHO PHÉP CHỌN NGÀY THỰC TẾ NHẬP KHO
+            with st.expander("🚚 CHUYỂN ĐƠN ORDER NÀY THÀNH LÔ NHẬP KHO (CHỌN NGÀY NHẬP THỰC TẾ)", expanded=True):
+                col_inp_date, col_inp_btn = st.columns([1, 1])
+                user_selected_import_date = col_inp_date.date_input("Chọn Ngày Thực Tế Nhập Kho:", date.today())
+                
+                if col_inp_btn.button("🚀 XÁC NHẬN NHẬP KHO", type="primary", use_container_width=True):
+                    c = conn.cursor()
+                    count_imported = 0
+                    for _, row in df_detail.iterrows():
+                        code = str(row['Mã Bánh'])
+                        qty = int(row['Số Lượng Order'])
+                        shelf_days = int(row['HSD Chuẩn']) if pd.notnull(row['HSD Chuẩn']) else 7
+                        
+                        # Tính HSD = Ngày chọn nhập + HSD chuẩn của bánh
+                        expiry_date = user_selected_import_date + timedelta(days=shelf_days)
+                        
+                        c.execute('''
+                            INSERT INTO inventory_batches (code, import_date, expiry_date, quantity)
+                            VALUES (?, ?, ?, ?)
+                        ''', (code, user_selected_import_date, expiry_date, qty))
+                        count_imported += 1
+                    conn.commit()
+                    st.success(f"🎉 Đã chuyển {count_imported} mã bánh vào kho với Ngày Nhập Kho chính thức là: **{user_selected_import_date}**!")
+                    st.info("💡 Bạn có thể sang mục '2. Báo cáo Tồn Kho & Hạn Sử Dụng' để xem chi tiết hạn sử dụng của các lô vừa nhập.")
 
     conn.close()
 
@@ -324,7 +329,7 @@ elif menu == "3. Nhập Kho Lô Mới":
 # CHỨC NĂNG 4: QUẢN LÝ DANH MỤC BÁNH
 # ---------------------------------------------------------
 elif menu == "4. Quản lý Danh mục Bánh":
-    st.header("⚙️️ Danh Mục Bánh & Cấu Hình Hạn Sử Dụng Chuẩn")
+    st.header("⚙️ Danh Mục Bánh & Cấu Hình Hạn Sử Dụng Chuẩn")
     st.info("💡 Bạn có thể bấm đúp vào từng ô để **SỬA TRỰC TIẾP** Tên Bánh, Giá Sỉ hoặc HSD Chuẩn, sau đó nhấn **'💾 Lưu Thay Đổi'** ở bên dưới.")
     
     conn = sqlite3.connect(DB_FILE)
