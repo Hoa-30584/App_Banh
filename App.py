@@ -94,7 +94,7 @@ if menu == "1. Soạn thảo & Nhập Order":
     
     conn = sqlite3.connect(DB_FILE)
     
-    # TAB 1: SOẠN THẢO
+    # TAB 1: SOẠN THẢO ORDER
     with tab_create:
         st.header("📋 Soạn Thảo & Nhập Số Lượng Order Bánh")
         
@@ -140,6 +140,7 @@ if menu == "1. Soạn thảo & Nhập Order":
             c = conn.cursor()
             orders_to_save = edited_df[edited_df['Số Lượng Order'] > 0]
             if not orders_to_save.empty:
+                # Xóa đơn trùng ngày nếu có để cập nhật đè mới
                 c.execute("DELETE FROM order_records WHERE order_date = ?", (order_date,))
                 for _, row in orders_to_save.iterrows():
                     c.execute('''
@@ -151,9 +152,9 @@ if menu == "1. Soạn thảo & Nhập Order":
             else:
                 st.warning("Vui lòng nhập số lượng Order (> 0) cho ít nhất 1 loại bánh!")
 
-    # TAB 2: LỊCH SỬ & CHUYỂN THÀNH LÔ NHẬP KHO
+    # TAB 2: LỊCH SỬ, XUẤT FILE VÀ XÓA ĐƠN ORDER
     with tab_history:
-        st.header("📦 Quản Lý & Xuất Danh Sách Đơn Order")
+        st.header("📦 Quản Lý, Xuất & Xóa Đơn Order")
         
         df_all_dates = pd.read_sql_query("SELECT DISTINCT order_date FROM order_records ORDER BY order_date DESC", conn)
         
@@ -184,15 +185,15 @@ if menu == "1. Soạn thảo & Nhập Order":
             st.markdown(f"**Tổng cộng:** **{sum_qty}** cái | **Tổng tiền:** **{sum_money:,.0f} VNĐ**")
             
             st.markdown("---")
-            col_dl, col_import = st.columns(2)
+            col_dl, col_import, col_delete = st.columns(3)
             
-            # Nút 1: Tải file Excel
+            # 1. Tải file Excel
             buffer = io.BytesIO()
             with pd.ExcelWriter(buffer, engine='openpyxl') as writer:
                 df_detail[['Mã Bánh', 'Tên Bánh', 'Giá Sỉ', 'Số Lượng Order', 'Thành Tiền']].to_excel(writer, index=False, sheet_name='Don_Order')
             
             col_dl.download_button(
-                label="📥 Tải file Excel Đơn Order này về máy",
+                label="📥 Tải Excel Đơn Order",
                 data=buffer.getvalue(),
                 file_name=f"Don_Order_Mecake_{selected_date}.xlsx",
                 mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
@@ -200,8 +201,8 @@ if menu == "1. Soạn thảo & Nhập Order":
                 use_container_width=True
             )
             
-            # Nút 2: Chuyển trực tiếp Đơn Order thành Lô Nhập Kho
-            if col_import.button("🚚 Xác nhận Hàng về -> CHUYỂN THÀNH LÔ NHẬP KHO", type="secondary", use_container_width=True):
+            # 2. Chuyển thành Lô Nhập Kho
+            if col_import.button("🚚 CHUYỂN THÀNH LÔ NHẬP KHO", type="secondary", use_container_width=True):
                 c = conn.cursor()
                 import_today = date.today()
                 count_imported = 0
@@ -217,8 +218,16 @@ if menu == "1. Soạn thảo & Nhập Order":
                     ''', (code, import_today, expiry_date, qty))
                     count_imported += 1
                 conn.commit()
-                st.success(f"🎉 Đã chuyển toàn bộ {count_imported} mã bánh từ Đơn Order ngày {selected_date} thành Lô Nhập Kho ngày hôm nay ({import_today})!")
+                st.success(f"🎉 Đã chuyển toàn bộ {count_imported} mã bánh từ Đơn Order ngày {selected_date} thành Lô Nhập Kho ngày hôm nay!")
                 st.info("💡 Bạn có thể kiểm tra tồn kho & HSD ở mục '2. Báo cáo Tồn Kho & Hạn Sử Dụng'.")
+
+            # 3. XÓA ĐƠN ORDER BỊ SAI
+            if col_delete.button("🗑️ XÓA HOÀN TOÀN ĐƠN ORDER NÀY", type="primary", use_container_width=True):
+                c = conn.cursor()
+                c.execute("DELETE FROM order_records WHERE order_date = ?", (selected_date,))
+                conn.commit()
+                st.success(f"🗑️ Đã xóa hoàn toàn dữ liệu đơn Order ngày {selected_date}!")
+                st.rerun()
 
     conn.close()
 
@@ -373,7 +382,7 @@ elif menu == "4. Quản lý Danh mục Bánh":
             list_codes = df_p['Mã Bánh'].tolist()
             if list_codes:
                 code_to_del = st.selectbox("Chọn Mã bánh cần xóa:", list_codes)
-                st.warning(f"⚠️ Cảnh báo: Xóa mã '{code_to_del}' sẽ xóa cả dữ liệu lịch sử liên quan đến mã này!")
+                st.warning(f"⚠️️ Cảnh báo: Xóa mã '{code_to_del}' sẽ xóa cả dữ liệu lịch sử liên quan đến mã này!")
                 if st.button("🗑️ Xác nhận Xóa Mã Bánh", type="primary"):
                     c = conn.cursor()
                     c.execute("DELETE FROM products WHERE code = ?", (code_to_del,))
