@@ -87,7 +87,7 @@ menu = st.sidebar.radio(
 )
 
 # ---------------------------------------------------------
-# CHỨC NĂNG 1: SOẠN THẢO & NHẬP ORDER + QUẢN LÝ ĐƠN ORDER
+# CHỨC NĂNG 1: SOẠN THẢO & NHẬP ORDER
 # ---------------------------------------------------------
 if menu == "1. Soạn thảo & Nhập Order":
     tab_create, tab_history = st.tabs(["📝 Soạn Thảo Order Mới", "📦 Lịch Sử Đơn Order Đã Chốt"])
@@ -140,7 +140,6 @@ if menu == "1. Soạn thảo & Nhập Order":
             c = conn.cursor()
             orders_to_save = edited_df[edited_df['Số Lượng Order'] > 0]
             if not orders_to_save.empty:
-                # Xóa đơn trùng ngày nếu có để cập nhật mới
                 c.execute("DELETE FROM order_records WHERE order_date = ?", (order_date,))
                 for _, row in orders_to_save.iterrows():
                     c.execute('''
@@ -148,11 +147,11 @@ if menu == "1. Soạn thảo & Nhập Order":
                         VALUES (?, ?, ?, ?)
                     ''', (order_date, row['Mã Bánh'], int(row['Số Lượng Order']), 'Order hàng'))
                 conn.commit()
-                st.success(f"✅ Đã lưu thành công đơn Order ngày {order_date}! Chuyển sang Tab 'Lịch Sử Đơn Order Đã Chốt' để xem và tải về.")
+                st.success(f"✅ Đã lưu thành công đơn Order ngày {order_date}! Chuyển sang Tab 'Lịch Sử Đơn Order Đã Chốt' để xem/xuất dữ liệu.")
             else:
                 st.warning("Vui lòng nhập số lượng Order (> 0) cho ít nhất 1 loại bánh!")
 
-    # TAB 2: LỊCH SỬ VÀ XUẤT ĐƠN ORDER
+    # TAB 2: LỊCH SỬ & CHUYỂN THÀNH LÔ NHẬP KHO
     with tab_history:
         st.header("📦 Quản Lý & Xuất Danh Sách Đơn Order")
         
@@ -168,6 +167,7 @@ if menu == "1. Soạn thảo & Nhập Order":
                     o.code AS 'Mã Bánh',
                     p.name AS 'Tên Bánh',
                     p.unit_price AS 'Giá Sỉ',
+                    p.shelf_life_days AS 'HSD Chuẩn',
                     o.order_qty AS 'Số Lượng Order',
                     (p.unit_price * o.order_qty) AS 'Thành Tiền'
                 FROM order_records o
@@ -177,24 +177,48 @@ if menu == "1. Soạn thảo & Nhập Order":
             df_detail = pd.read_sql_query(query_detail, conn, params=(selected_date,))
             
             st.subheader(f"Danh sách Bánh Order cho ngày: {selected_date}")
-            st.dataframe(df_detail, use_container_width=True, hide_index=True)
+            st.dataframe(df_detail[['Mã Bánh', 'Tên Bánh', 'Giá Sỉ', 'Số Lượng Order', 'Thành Tiền']], use_container_width=True, hide_index=True)
             
             sum_qty = df_detail['Số Lượng Order'].sum()
             sum_money = df_detail['Thành Tiền'].sum()
             st.markdown(f"**Tổng cộng:** **{sum_qty}** cái | **Tổng tiền:** **{sum_money:,.0f} VNĐ**")
             
-            # Xuất file Excel đơn order
+            st.markdown("---")
+            col_dl, col_import = st.columns(2)
+            
+            # Nút 1: Tải file Excel
             buffer = io.BytesIO()
             with pd.ExcelWriter(buffer, engine='openpyxl') as writer:
-                df_detail.to_excel(writer, index=False, sheet_name='Don_Order')
+                df_detail[['Mã Bánh', 'Tên Bánh', 'Giá Sỉ', 'Số Lượng Order', 'Thành Tiền']].to_excel(writer, index=False, sheet_name='Don_Order')
             
-            st.download_button(
+            col_dl.download_button(
                 label="📥 Tải file Excel Đơn Order này về máy",
                 data=buffer.getvalue(),
                 file_name=f"Don_Order_Mecake_{selected_date}.xlsx",
                 mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-                type="primary"
+                type="primary",
+                use_container_width=True
             )
+            
+            # Nút 2: Chuyển trực tiếp Đơn Order thành Lô Nhập Kho
+            if col_import.button("🚚 Xác nhận Hàng về -> CHUYỂN THÀNH LÔ NHẬP KHO", type="secondary", use_container_width=True):
+                c = conn.cursor()
+                import_today = date.today()
+                count_imported = 0
+                for _, row in df_detail.iterrows():
+                    code = str(row['Mã Bánh'])
+                    qty = int(row['Số Lượng Order'])
+                    shelf_days = int(row['HSD Chuẩn']) if pd.notnull(row['HSD Chuẩn']) else 7
+                    expiry_date = import_today + timedelta(days=shelf_days)
+                    
+                    c.execute('''
+                        INSERT INTO inventory_batches (code, import_date, expiry_date, quantity)
+                        VALUES (?, ?, ?, ?)
+                    ''', (code, import_today, expiry_date, qty))
+                    count_imported += 1
+                conn.commit()
+                st.success(f"🎉 Đã chuyển toàn bộ {count_imported} mã bánh từ Đơn Order ngày {selected_date} thành Lô Nhập Kho ngày hôm nay ({import_today})!")
+                st.info("💡 Bạn có thể kiểm tra tồn kho & HSD ở mục '2. Báo cáo Tồn Kho & Hạn Sử Dụng'.")
 
     conn.close()
 
@@ -221,7 +245,7 @@ elif menu == "2. Báo cáo Tồn Kho & Hạn Sử Dụng":
     df_batches = pd.read_sql_query(query, conn)
     
     if df_batches.empty:
-        st.info("Hiện chưa có lô hàng nào trong kho. Vui lòng sang tab 'Nhập Kho Lô Mới' để thêm hàng!")
+        st.info("Hiện chưa có lô hàng nào trong kho. Vui lòng sang tab 'Nhập Kho Lô Mới' hoặc 'Chuyển đơn order thành lô nhập kho' để thêm hàng!")
     else:
         today = date.today()
         df_batches['Hạn Sử Dụng'] = pd.to_datetime(df_batches['Hạn Sử Dụng']).dt.date
