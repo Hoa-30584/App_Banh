@@ -44,6 +44,18 @@ def init_db():
             note TEXT
         )
     ''')
+    # Bảng ghi nhận Kho Hàng Hủy
+    c.execute('''
+        CREATE TABLE IF NOT EXISTS discarded_goods (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            batch_id INTEGER,
+            code TEXT,
+            discard_date DATE,
+            quantity INTEGER,
+            unit_price REAL,
+            reason TEXT
+        )
+    ''')
     conn.commit()
     conn.close()
 
@@ -151,7 +163,7 @@ if menu == "1. Soạn thảo & Nhập Order":
             else:
                 st.warning("Vui lòng nhập số lượng Order (> 0) cho ít nhất 1 loại bánh!")
 
-    # TAB 2: LỊCH SỬ, XUẤT FILE VÀ CHUYỂN KHO CHỌN NGÀY
+    # TAB 2: LỊCH SỬ, XUẤT FILE VÀ CHUYỂN KHO
     with tab_history:
         st.header("📦 Quản Lý, Xuất & Xóa Đơn Order")
         
@@ -209,7 +221,6 @@ if menu == "1. Soạn thảo & Nhập Order":
                 st.rerun()
 
             st.markdown("---")
-            # KHỐI CHUYỂN ĐƠN ORDER THÀNH KHO - CHO PHÉP CHỌN NGÀY THỰC TẾ NHẬP KHO
             with st.expander("🚚 CHUYỂN ĐƠN ORDER NÀY THÀNH LÔ NHẬP KHO (CHỌN NGÀY NHẬP THỰC TẾ)", expanded=True):
                 col_inp_date, col_inp_btn = st.columns([1, 1])
                 user_selected_import_date = col_inp_date.date_input("Chọn Ngày Thực Tế Nhập Kho:", date.today())
@@ -221,7 +232,6 @@ if menu == "1. Soạn thảo & Nhập Order":
                         code = str(row['Mã Bánh'])
                         qty = int(row['Số Lượng Order'])
                         
-                        # Lấy HSD chuẩn mới nhất từ bảng products
                         c.execute("SELECT shelf_life_days FROM products WHERE code = ?", (code,))
                         p_row = c.fetchone()
                         shelf_days = p_row[0] if p_row else 7
@@ -235,64 +245,155 @@ if menu == "1. Soạn thảo & Nhập Order":
                         count_imported += 1
                     conn.commit()
                     st.success(f"🎉 Đã chuyển {count_imported} mã bánh vào kho với Ngày Nhập Kho chính thức là: **{user_selected_import_date}**!")
-                    st.info("💡 Bạn có thể sang mục '2. Báo cáo Tồn Kho & Hạn Sử Dụng' để xem chi tiết hạn sử dụng của các lô vừa nhập.")
+                    st.info("💡 Bạn có thể sang mục '2. Báo cáo Tồn Kho & Hạn Sử Dụng' để xem chi tiết hạn sử dụng.")
 
     conn.close()
 
 # ---------------------------------------------------------
-# CHỨC NĂNG 2: BÁO CÁO TỒN KHO THEO THỜI GIAN & CẢNH BÁO HSD
+# CHỨC NĂNG 2: BÁO CÁO TỒN KHO & CẢNH BÁO CẬN DATE / HỦY HÀNG
 # ---------------------------------------------------------
 elif menu == "2. Báo cáo Tồn Kho & Hạn Sử Dụng":
-    st.header("⏳ Kiểm Soát Tồn Kho & Hạn Sử Dụng Theo Thời Gian")
+    tab_inv, tab_discard = st.tabs(["⏳ Tồn Kho & Cảnh Báo HSD", "🗑️ Kho Hàng Hủy & Báo Cáo Lãng Phí"])
     
     conn = sqlite3.connect(DB_FILE)
-    query = '''
-        SELECT 
-            b.id AS 'ID Lô',
-            b.code AS 'Mã Bánh',
-            p.name AS 'Tên Bánh',
-            b.import_date AS 'Ngày Nhập',
-            b.expiry_date AS 'Hạn Sử Dụng',
-            b.quantity AS 'Số Lượng Tồn'
-        FROM inventory_batches b
-        JOIN products p ON b.code = p.code
-        WHERE b.quantity > 0
-        ORDER BY b.expiry_date ASC
-    '''
-    df_batches = pd.read_sql_query(query, conn)
     
-    if df_batches.empty:
-        st.info("Hiện chưa có lô hàng nào trong kho. Vui lòng sang tab 'Nhập Kho Lô Mới' hoặc 'Chuyển đơn order thành lô nhập kho' để thêm hàng!")
-    else:
-        today = date.today()
-        df_batches['Hạn Sử Dụng'] = pd.to_datetime(df_batches['Hạn Sử Dụng']).dt.date
-        df_batches['Số Ngày Còn Lại'] = (pd.to_datetime(df_batches['Hạn Sử Dụng']) - pd.to_datetime(today)).dt.days
+    with tab_inv:
+        st.header("⏳ Kiểm Soát Tồn Kho & Hạn Sử Dụng Theo Thời Gian")
         
-        def set_status(days):
-            if days < 0:
-                return "🔴 Đã Hết Hạn"
-            elif days <= 2:
-                return "🟡 Cận Date (Cần Bán Gấp)"
-            else:
-                return "🟢 An Toàn"
+        # KHỐI CẤU HÌNH CẢNH BÁO TỰ ĐIỀU CHỈNH
+        with st.expander("⚙️ CẤU HÌNH NGƯỠNG CẢNH BÁO & KHUYẾN CÁO BÁN HÀNG", expanded=False):
+            c_cfg1, c_cfg2 = st.columns([1, 2])
+            warn_days = c_cfg1.number_input("Cảnh báo cận Date khi số ngày còn lại ≤ (ngày):", min_value=1, value=2, step=1)
+            discount_policy = c_cfg2.text_input("Nội dung Khuyến cáo bán hàng (Chiết khấu):", "Giảm giá 30% - 50% hoặc Tặng kèm Combo để giải phóng hàng")
+        
+        query = '''
+            SELECT 
+                b.id AS 'ID Lô',
+                b.code AS 'Mã Bánh',
+                p.name AS 'Tên Bánh',
+                p.unit_price AS 'Giá Sỉ',
+                b.import_date AS 'Ngày Nhập',
+                b.expiry_date AS 'Hạn Sử Dụng',
+                b.quantity AS 'Số Lượng Tồn'
+            FROM inventory_batches b
+            JOIN products p ON b.code = p.code
+            WHERE b.quantity > 0
+            ORDER BY b.expiry_date ASC
+        '''
+        df_batches = pd.read_sql_query(query, conn)
+        
+        if df_batches.empty:
+            st.info("Hiện chưa có lô hàng nào trong kho. Vui lòng sang tab 'Nhập Kho Lô Mới' hoặc 'Chuyển đơn order thành lô nhập kho' để thêm hàng!")
+        else:
+            today = date.today()
+            df_batches['Hạn Sử Dụng'] = pd.to_datetime(df_batches['Hạn Sử Dụng']).dt.date
+            df_batches['Số Ngày Còn Lại'] = (pd.to_datetime(df_batches['Hạn Sử Dụng']) - pd.to_datetime(today)).dt.days
+            
+            def set_status(days):
+                if days < 0:
+                    return "🔴 Đã Hết Hạn"
+                elif days <= warn_days:
+                    return "🟡 Cận Date"
+                else:
+                    return "🟢 An Toàn"
+                    
+            df_batches['Trạng Thái'] = df_batches['Số Ngày Còn Lại'].apply(set_status)
+            
+            expired_df = df_batches[df_batches['Số Ngày Còn Lại'] < 0]
+            warning_df = df_batches[(df_batches['Số Ngày Còn Lại'] >= 0) & (df_batches['Số Ngày Còn Lại'] <= warn_days)]
+            safe_df = df_batches[df_batches['Số Ngày Còn Lại'] > warn_days]
+            
+            c1, c2, c3 = st.columns(3)
+            c1.metric("🟢 Lô An Toàn", f"{len(safe_df)} lô")
+            c2.metric(f"🟡 Lô Cận Date (≤{warn_days} ngày)", f"{len(warning_df)} lô")
+            c3.metric("🔴 Lô Hết Hạn (Cần Hủy)", f"{len(expired_df)} lô")
+            
+            # Khuyến cáo bán hàng nếu có hàng cận Date
+            if not warning_df.empty:
+                st.warning(f"⚠️ **CẢNH BÁO BÁN HÀNG CẬN DATE:** Có {len(warning_df)} lô hàng cận HSD! 👉 **Khuyến cáo:** {discount_policy}")
+            
+            st.subheader("Chi tiết Tồn kho từng Lô bánh (Ưu tiên Lô gần hết hạn lên đầu):")
+            
+            # Hiển thị danh sách các lô
+            for idx, row in df_batches.iterrows():
+                batch_id = row['ID Lô']
+                code = row['Mã Bánh']
+                name = row['Tên Bánh']
+                price = row['Giá Sỉ']
+                days_left = row['Số Ngày Còn Lại']
+                qty = row['Số Lượng Tồn']
+                status = row['Trạng Thái']
                 
-        df_batches['Trạng Thái'] = df_batches['Số Ngày Còn Lại'].apply(set_status)
+                # Định dạng màu dòng
+                if days_left < 0:
+                    st.error(f"🔴 **Lô #{batch_id} - [{code}] {name}** | Số lượng tồn: **{qty}** cái | HSD: {row['Hạn Sử Dụng']} (**Quá {abs(days_left)} ngày**) | Giá sỉ: {price:,.0f}₫")
+                    
+                    # NỔI NÚT HỦY BÁNH KHI HẾT HẠN
+                    c_act1, c_act2 = st.columns([1, 3])
+                    reason_inp = c_act2.text_input("Lý do hủy:", "Bánh quá hạn sử dụng", key=f"reason_{batch_id}")
+                    if c_act1.button(f"🗑️ HỦY LÔ BÁNH #{batch_id}", type="primary", key=f"btn_del_{batch_id}"):
+                        c = conn.cursor()
+                        # 1. Trừ tồn kho về 0
+                        c.execute("UPDATE inventory_batches SET quantity = 0 WHERE id = ?", (batch_id,))
+                        # 2. Ghi nhận vào Kho hàng hủy
+                        c.execute('''
+                            INSERT INTO discarded_goods (batch_id, code, discard_date, quantity, unit_price, reason)
+                            VALUES (?, ?, ?, ?, ?, ?)
+                        ''', (batch_id, code, date.today(), qty, price, reason_inp))
+                        conn.commit()
+                        st.success(f"✅ Đã hủy {qty} bánh mã {code} và chuyển số liệu sang Kho Hàng Hủy!")
+                        st.rerun()
+                elif days_left <= warn_days:
+                    st.warning(f"🟡 **Lô #{batch_id} - [{code}] {name}** | Số lượng tồn: **{qty}** cái | Còn **{days_left} ngày HSD** | 👉 **Khuyến cáo:** {discount_policy}")
+                else:
+                    st.success(f"🟢 **Lô #{batch_id} - [{code}] {name}** | Số lượng tồn: **{qty}** cái | Còn **{days_left} ngày HSD**")
+
+    # TAB KHO HÀNG HỦY
+    with tab_discard:
+        st.header("🗑️ Báo Cáo Kho Hàng Hủy & Thiệt Hại Lãng Phí")
         
-        expired_count = len(df_batches[df_batches['Số Ngày Còn Lại'] < 0])
-        warning_count = len(df_batches[(df_batches['Số Ngày Còn Lại'] >= 0) & (df_batches['Số Ngày Còn Lại'] <= 2)])
-        safe_count = len(df_batches[df_batches['Số Ngày Còn Lại'] > 2])
+        query_discard = '''
+            SELECT 
+                d.id AS 'Mã Bản Ghi',
+                d.discard_date AS 'Ngày Hủy',
+                d.code AS 'Mã Bánh',
+                p.name AS 'Tên Bánh',
+                d.quantity AS 'Số Lượng Hủy',
+                d.unit_price AS 'Đơn Giá Sỉ',
+                (d.quantity * d.unit_price) AS 'Tổng Thiệt Hại (VNĐ)',
+                d.reason AS 'Lý Do Hủy'
+            FROM discarded_goods d
+            JOIN products p ON d.code = p.code
+            ORDER BY d.discard_date DESC
+        '''
+        df_dis = pd.read_sql_query(query_discard, conn)
         
-        c1, c2, c3 = st.columns(3)
-        c1.metric("🟢 Lô An Toàn", f"{safe_count} lô")
-        c2.metric("🟡 Lô Cận Date (≤2 ngày)", f"{warning_count} lô")
-        c3.metric("🔴 Lô Hết Hạn", f"{expired_count} lô")
-        
-        st.subheader("Chi tiết Tồn kho từng Lô bánh (Ưu tiên Lô gần hết hạn lên đầu):")
-        st.dataframe(
-            df_batches[['ID Lô', 'Mã Bánh', 'Tên Bánh', 'Ngày Nhập', 'Hạn Sử Dụng', 'Số Ngày Còn Lại', 'Số Lượng Tồn', 'Trạng Thái']],
-            use_container_width=True,
-            hide_index=True
-        )
+        if df_dis.empty:
+            st.info("Chưa có ghi nhận hủy bánh nào trong hệ thống. Cửa hàng vận hành rất tốt!")
+        else:
+            total_dis_qty = df_dis['Số Lượng Hủy'].sum()
+            total_dis_money = df_dis['Tổng Thiệt Hại (VNĐ)'].sum()
+            
+            cm1, cm2 = st.columns(2)
+            cm1.metric("Tổng Số Lượng Bánh Hủy", f"{total_dis_qty} cái")
+            cm2.metric("Tổng Giá Trị Thiệt Hại (Giá sỉ)", f"{total_dis_money:,.0f} VNĐ")
+            
+            st.subheader("Chi tiết Danh sách Bánh Đã Hủy:")
+            st.dataframe(df_dis, use_container_width=True, hide_index=True)
+            
+            # Nút tải báo cáo hủy
+            buffer_dis = io.BytesIO()
+            with pd.ExcelWriter(buffer_dis, engine='openpyxl') as writer:
+                df_dis.to_excel(writer, index=False, sheet_name='Hang_Huy')
+            
+            st.download_button(
+                label="📥 Tải Báo Cáo Kho Hàng Hủy (Excel)",
+                data=buffer_dis.getvalue(),
+                file_name=f"Bao_Cao_Hang_Huy_Mecake_{date.today()}.xlsx",
+                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                type="primary"
+            )
+            
     conn.close()
 
 # ---------------------------------------------------------
@@ -329,7 +430,7 @@ elif menu == "3. Nhập Kho Lô Mới":
     conn.close()
 
 # ---------------------------------------------------------
-# CHỨC NĂNG 4: QUẢN LÝ DANH MỤC BÁNH (ĐÃ THÊM ĐỒNG BỘ CẬP NHẬT KHO)
+# CHỨC NĂNG 4: QUẢN LÝ DANH MỤC BÁNH
 # ---------------------------------------------------------
 elif menu == "4. Quản lý Danh mục Bánh":
     st.header("⚙️ Danh Mục Bánh & Cấu Hình Hạn Sử Dụng Chuẩn")
@@ -360,14 +461,12 @@ elif menu == "4. Quản lý Danh mục Bánh":
             price_val = float(row['Giá Sỉ'])
             shelf_days_val = int(row['HSD Chuẩn (Ngày)'])
             
-            # 1. Cập nhật bảng Danh mục bánh
             c.execute('''
                 UPDATE products 
                 SET name = ?, unit_price = ?, shelf_life_days = ?
                 WHERE code = ?
             ''', (name_val, price_val, shelf_days_val, code_val))
             
-            # 2. ĐỒNG BỘ: Tính toán lại Expiry_date cho toàn bộ lô tồn kho của Mã Bánh này
             c.execute("SELECT id, import_date FROM inventory_batches WHERE code = ? AND quantity > 0", (code_val,))
             batches = c.fetchall()
             for batch_id, import_date_str in batches:
