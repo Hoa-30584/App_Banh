@@ -152,12 +152,12 @@ def confirm_delete_dialog(target_type):
                 st.error("Mã khôi phục không đúng!")
 
 # ---------------------------------------------------------
-# GIAO DIỆN CHÍNH (SIDEBAR MENU)
+# GIAO DIỆN CHÍNH (SIDEBAR MENU - ĐÃ RÚT GỌN NÚT TÍNH NĂNG 3)
 # ---------------------------------------------------------
 st.sidebar.title("🧁 Mecake Manager")
 menu = st.sidebar.radio(
     "Chọn chức năng", 
-    ["1. Soạn thảo & Nhập Order", "2. Báo cáo Tồn Kho & Hạn Sử Dụng", "3. Nhập Kho Lô Mới", "4. Quản lý Danh mục Bánh"]
+    ["1. Soạn thảo & Nhập Order", "2. Báo cáo Tồn Kho & Hạn Sử Dụng", "3. Quản lý Danh mục Bánh"]
 )
 
 # ---------------------------------------------------------
@@ -482,7 +482,6 @@ elif menu == "2. Báo cáo Tồn Kho & Hạn Sử Dụng":
                         st.success(f"✅ Đã hủy {b_qty} bánh lô #{b_id} và chuyển vào Kho Hàng Hủy!")
                         st.rerun()
 
-        # KHỐI BẢO MẬT: NÚT BẤM KÍCH HOẠT POPUP XÓA KHO & ĐỔI MẬT KHẨU
         st.markdown("---")
         with st.expander("🔒 QUẢN LÝ MẬT KHẨU & XÓA SẠCH DỮ LIỆU KHO (BẢO MẬT)", expanded=False):
             current_pass = get_admin_password()
@@ -503,7 +502,6 @@ elif menu == "2. Báo cáo Tồn Kho & Hạn Sử Dụng":
 
             col_clr_inv, col_clr_dis = st.columns(2)
             
-            # BẤM NÚT SẼ NỔI POPUP DIALOG HỎI PASS
             if col_clr_inv.button("🔐 XÓA SẠCH TỒN KHO (RESET KHO VỀ 0)", type="primary", use_container_width=True):
                 confirm_delete_dialog("Tồn Kho")
 
@@ -558,42 +556,9 @@ elif menu == "2. Báo cáo Tồn Kho & Hạn Sử Dụng":
     conn.close()
 
 # ---------------------------------------------------------
-# CHỨC NĂNG 3: NHẬP KHO LÔ MỚI
+# CHỨC NĂNG 3: QUẢN LÝ DANH MỤC BÁNH
 # ---------------------------------------------------------
-elif menu == "3. Nhập Kho Lô Mới":
-    st.header("📥 Nhập Kho Lô Bánh Mới (Tự động tính HSD)")
-    
-    conn = sqlite3.connect(DB_FILE)
-    df_prod = pd.read_sql_query("SELECT code, name, shelf_life_days FROM products", conn)
-    
-    if df_prod.empty:
-        st.warning("Chưa có danh mục bánh. Vui lòng thêm bánh ở menu 'Quản lý Danh mục Bánh'!")
-    else:
-        prod_dict = {f"{row['code']} - {row['name']}": (row['code'], row['shelf_life_days']) for _, row in df_prod.iterrows()}
-        selected_prod = st.selectbox("Chọn Mã bánh nhập kho:", list(prod_dict.keys()))
-        code, default_shelf_life = prod_dict[selected_prod]
-        
-        col1, col2 = st.columns(2)
-        import_date = col1.date_input("Ngày Nhập Kho", date.today())
-        quantity = col2.number_input("Số Lượng Nhập", min_value=1, value=15, step=1)
-        
-        calculated_expiry = import_date + timedelta(days=default_shelf_life)
-        expiry_date = st.date_input("Hạn Sử Dụng (Tự động đề xuất theo cấu hình bánh)", calculated_expiry)
-        
-        if st.button("➕ Xác Nhận Nhập Kho Lô Hàng"):
-            c = conn.cursor()
-            c.execute('''
-                INSERT INTO inventory_batches (code, import_date, expiry_date, quantity)
-                VALUES (?, ?, ?, ?)
-            ''', (code, import_date, expiry_date, int(quantity)))
-            conn.commit()
-            st.success(f"Đã nhập thành công {quantity} bánh mã {code} (HSD: {expiry_date}) vào hệ thống kho!")
-    conn.close()
-
-# ---------------------------------------------------------
-# CHỨC NĂNG 4: QUẢN LÝ DANH MỤC BÁNH
-# ---------------------------------------------------------
-elif menu == "4. Quản lý Danh mục Bánh":
+elif menu == "3. Quản lý Danh mục Bánh":
     st.header("⚙️ Danh Mục Bánh & Cấu Hình Hạn Sử Dụng Chuẩn")
     st.info("💡 Bạn có thể bấm đúp vào từng ô để **SỬA TRỰC TIẾP** Tên Bánh, Giá Sỉ hoặc HSD Chuẩn, sau đó nhấn **'💾 Lưu Thay Đổi'** ở bên dưới.")
     
