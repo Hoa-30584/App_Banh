@@ -64,7 +64,7 @@ def init_db():
             value TEXT
         )
     ''')
-    c.execute("INSERT OR IGNORE INTO settings (key, value) VALUES ('admin_password', '123456')")
+    c.execute("INSERT OR IGNORE INTO settings (key, value) VALUES ('admin_password', '180711')")
     c.execute("INSERT OR IGNORE INTO settings (key, value) VALUES ('tele_token', '')")
     c.execute("INSERT OR IGNORE INTO settings (key, value) VALUES ('tele_chat_id', '')")
     conn.commit()
@@ -183,7 +183,7 @@ def confirm_delete_dialog(target_type):
     elif target_type == "Kho Hàng Hủy":
         st.warning("⚠️ Bạn đang yêu cầu: **XÓA SẠCH KHO HÀNG HỦY**.")
         pwd_input = st.text_input("Nhập Mật khẩu Admin:", type="password", key="dlg_pwd_input_dis")
-        current_pass = get_setting('admin_password', '123456')
+        current_pass = get_setting('admin_password', '180711')
         
         col_act1, col_act2 = st.columns(2)
         if col_act1.button("✅ Xác Nhận Xóa", type="primary", use_container_width=True):
@@ -200,12 +200,12 @@ def confirm_delete_dialog(target_type):
     conn.close()
 
     with st.expander("❓ Quên Mật Khẩu?"):
-        st.info("Nhập Mã Khôi Phục Hệ Thống (`MECAKE-ADMIN-999`) để reset mật khẩu về `123456`.")
+        st.info("Nhập Mã Khôi Phục Hệ Thống")
         rec_code = st.text_input("Mã Khôi Phục:", key="dlg_rec_inp")
-        if st.button("Reset Mật Khẩu Về 123456"):
+        if st.button("Reset Mật Khẩu"):
             if rec_code.strip() == RECOVERY_CODE:
-                set_setting('admin_password', "123456")
-                st.success("✅ Đã đặt lại Mật Khẩu Admin về mặc định: 123456")
+                set_setting('admin_password', "180711")
+                st.success("✅ Đã đặt lại Mật Khẩu Admin về mặc định")
                 st.rerun()
             else:
                 st.error("Mã khôi phục không đúng!")
