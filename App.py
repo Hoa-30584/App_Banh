@@ -141,7 +141,7 @@ def confirm_delete_dialog(target_type):
             st.error("❌ Mật khẩu không chính xác!")
 
     with st.expander("❓ Quên Mật Khẩu?"):
-        st.info("Nhập Mã Khôi Phục Hệ Thống (`MECAKE-ADMIN-999`) để reset mật khẩu về `123456`.")
+        st.info("Nhập Mã Khôi Phục Hệ Thống để khôi phục về Pass mặc định")
         rec_code = st.text_input("Mã Khôi Phục:", key="dlg_rec_inp")
         if st.button("Reset Mật Khẩu Về 123456"):
             if rec_code.strip() == RECOVERY_CODE:
