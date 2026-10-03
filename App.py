@@ -143,7 +143,7 @@ def confirm_delete_dialog(target_type):
     with st.expander("❓ Quên Mật Khẩu?"):
         st.info("Nhập Mã Khôi Phục Hệ Thống để khôi phục về Pass mặc định")
         rec_code = st.text_input("Mã Khôi Phục:", key="dlg_rec_inp")
-        if st.button("Reset Mật Khẩu Về 123456"):
+        if st.button("Reset Mật Khẩu"):
             if rec_code.strip() == RECOVERY_CODE:
                 set_admin_password("123456")
                 st.success("✅ Đã đặt lại Mật Khẩu Admin về mặc định: 123456")
