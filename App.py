@@ -62,7 +62,7 @@ def init_db():
             value TEXT
         )
     ''')
-    c.execute("INSERT OR IGNORE INTO settings (key, value) VALUES ('admin_password', '123456')")
+    c.execute("INSERT OR IGNORE INTO settings (key, value) VALUES ('admin_password', '180711')")
     conn.commit()
     conn.close()
 
@@ -72,7 +72,7 @@ def get_admin_password():
     c.execute("SELECT value FROM settings WHERE key = 'admin_password'")
     row = c.fetchone()
     conn.close()
-    return row[0] if row else "123456"
+    return row[0] if row else "180711" 
 
 def set_admin_password(new_pass):
     conn = sqlite3.connect(DB_FILE)
@@ -145,8 +145,8 @@ def confirm_delete_dialog(target_type):
         rec_code = st.text_input("Mã Khôi Phục:", key="dlg_rec_inp")
         if st.button("Reset Mật Khẩu"):
             if rec_code.strip() == RECOVERY_CODE:
-                set_admin_password("123456")
-                st.success("✅ Đã đặt lại Mật Khẩu Admin về mặc định: 123456")
+                set_admin_password("180711")
+                st.success("✅ Đã đặt lại Mật Khẩu Admin về mặc định")
                 st.rerun()
             else:
                 st.error("Mã khôi phục không đúng!")
