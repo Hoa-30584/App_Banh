@@ -107,7 +107,7 @@ def send_telegram_msg(bot_token, chat_id, message_text):
 def load_data_from_excel_if_empty():
     #them phần dưới để loại bỏ việc load file excel
     if not EXCEL_FILE:
-    return
+      return
     conn = sqlite3.connect(DB_FILE)
     c = conn.cursor()
     c.execute("SELECT COUNT(*) FROM products")
