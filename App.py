@@ -4,12 +4,14 @@ import sqlite3
 from datetime import datetime, date, timedelta
 import os
 import io
+import requests
 
 # Cấu hình trang Streamlit
 st.set_page_config(page_title="Mecake - Quản lý Kho & Order", layout="wide", page_icon="🧁")
 
 DB_FILE = "mecake_management.db"
-EXCEL_FILE = "Chốt tồn và oder Mecake.xlsx"
+EXCEL_FILE = None  
+#"Chốt tồn và oder Mecake.xlsx"
 RECOVERY_CODE = "MECAKE-ADMIN-999" # Mã khôi phục hệ thống khi quên mật khẩu
 
 # ---------------------------------------------------------
@@ -62,24 +64,45 @@ def init_db():
             value TEXT
         )
     ''')
-    c.execute("INSERT OR IGNORE INTO settings (key, value) VALUES ('admin_password', '180711')")
+    c.execute("INSERT OR IGNORE INTO settings (key, value) VALUES ('admin_password', '123456')")
+    c.execute("INSERT OR IGNORE INTO settings (key, value) VALUES ('tele_token', '')")
+    c.execute("INSERT OR IGNORE INTO settings (key, value) VALUES ('tele_chat_id', '')")
     conn.commit()
     conn.close()
 
-def get_admin_password():
+def get_setting(key_name, default_val=""):
     conn = sqlite3.connect(DB_FILE)
     c = conn.cursor()
-    c.execute("SELECT value FROM settings WHERE key = 'admin_password'")
+    c.execute("SELECT value FROM settings WHERE key = ?", (key_name,))
     row = c.fetchone()
     conn.close()
-    return row[0] if row else "180711" 
+    return row[0] if row else default_val
 
-def set_admin_password(new_pass):
+def set_setting(key_name, val):
     conn = sqlite3.connect(DB_FILE)
     c = conn.cursor()
-    c.execute("INSERT OR REPLACE INTO settings (key, value) VALUES ('admin_password', ?)", (new_pass,))
+    c.execute("INSERT OR REPLACE INTO settings (key, value) VALUES (?, ?)", (key_name, val))
     conn.commit()
     conn.close()
+
+def send_telegram_msg(bot_token, chat_id, message_text):
+    if not bot_token or not chat_id:
+        return False, "Chưa cấu hình Token hoặc Chat ID Telegram!"
+    
+    url = f"https://api.telegram.org/bot{bot_token}/sendMessage"
+    payload = {
+        "chat_id": chat_id,
+        "text": message_text,
+        "parse_mode": "Markdown"
+    }
+    try:
+        res = requests.post(url, json=payload, timeout=10)
+        if res.status_code == 200:
+            return True, "Gửi tin nhắn Telegram thành công!"
+        else:
+            return False, f"Lỗi Telegram: {res.text}"
+    except Exception as e:
+        return False, f"Lỗi kết nối: {e}"
 
 def load_data_from_excel_if_empty():
     conn = sqlite3.connect(DB_FILE)
@@ -87,7 +110,7 @@ def load_data_from_excel_if_empty():
     c.execute("SELECT COUNT(*) FROM products")
     count = c.fetchone()[0]
     
-    if count == 0 and os.path.exists(EXCEL_FILE):
+    if count == 0 and EXCEL_FILE and os.path.exists(EXCEL_FILE):
         try:
             df_price = pd.read_excel(EXCEL_FILE, sheet_name='Tiền nhập bánh ')
             df_price = df_price.dropna(subset=['Mã Bánh'])
@@ -110,43 +133,78 @@ def load_data_from_excel_if_empty():
 
 init_db()
 load_data_from_excel_if_empty()
+#them phần dưới để loại bỏ việc load file excel
+        if not EXCEL_FILE:
+    return
 
 # ---------------------------------------------------------
-# POPUP DIALOG BẢO MẬT XÓA KHO
+# POPUP DIALOG BẢO MẬT XÓA KHO (XÓA THEO NGÀY NHẬP KHO)
 # ---------------------------------------------------------
-@st.dialog("🔐 Xác Nhận Mật Khẩu Để Xóa Dữ Liệu")
+@st.dialog("🔐 Xác Nhận Xóa Dữ Liệu Tồn Kho")
 def confirm_delete_dialog(target_type):
-    st.warning(f"⚠️ Bạn đang yêu cầu: **XÓA SẠCH {target_type.upper()}**.")
-    st.write("Vui lòng nhập Mật Khẩu Admin để hoàn tất thao tác này:")
+    conn = sqlite3.connect(DB_FILE)
     
-    pwd_input = st.text_input("Nhập Mật khẩu:", type="password", key="dlg_pwd_input")
-    current_pass = get_admin_password()
-    
-    col_act1, col_act2 = st.columns(2)
-    
-    if col_act1.button("✅ Xác Nhận Xóa", type="primary", use_container_width=True):
-        if pwd_input == current_pass:
-            conn = sqlite3.connect(DB_FILE)
-            c = conn.cursor()
-            if target_type == "Tồn Kho":
-                c.execute("DELETE FROM inventory_batches")
-                st.success("🎉 Đã xóa sạch toàn bộ dữ liệu Tồn Kho!")
-            elif target_type == "Kho Hàng Hủy":
-                c.execute("DELETE FROM discarded_goods")
-                st.success("🎉 Đã xóa sạch toàn bộ dữ liệu Kho Hàng Hủy!")
-            conn.commit()
+    if target_type == "Tồn Kho":
+        # Lấy danh sách các ngày nhập kho đang có trong CSDL
+        df_dates = pd.read_sql_query("SELECT DISTINCT import_date FROM inventory_batches WHERE quantity > 0 ORDER BY import_date DESC", conn)
+        avail_dates = df_dates['import_date'].tolist() if not df_dates.empty else []
+        
+        st.warning("⚠️ **CHỨC NĂNG XÓA KHO THEO NGÀY NHẬP:**")
+        
+        if not avail_dates:
+            st.info("Hiện không có lô hàng nào trong kho để xóa.")
             conn.close()
-            st.rerun()
-        else:
-            st.error("❌ Mật khẩu không chính xác!")
+            return
+            
+        select_options = ["Tất cả các ngày nhập (Xóa sạch kho)"] + avail_dates
+        selected_del_date = st.selectbox("Chọn Ngày Nhập Kho Cần Xóa:", select_options)
+        
+        st.write("Vui lòng nhập Mật Khẩu Admin để hoàn tất thao tác xóa:")
+        pwd_input = st.text_input("Nhập Mật khẩu Admin:", type="password", key="dlg_pwd_input_inv")
+        current_pass = get_setting('admin_password', '123456')
+        
+        col_act1, col_act2 = st.columns(2)
+        if col_act1.button("✅ Xác Nhận Xóa", type="primary", use_container_width=True):
+            if pwd_input == current_pass:
+                c = conn.cursor()
+                if selected_del_date == "Tất cả các ngày nhập (Xóa sạch kho)":
+                    c.execute("DELETE FROM inventory_batches")
+                    st.success("🎉 Đã xóa sạch toàn bộ dữ liệu Tồn Kho!")
+                else:
+                    c.execute("DELETE FROM inventory_batches WHERE import_date = ?", (selected_del_date,))
+                    st.success(f"🎉 Đã xóa toàn bộ lô hàng thuộc Ngày Nhập Kho: **{selected_del_date}**!")
+                conn.commit()
+                conn.close()
+                st.rerun()
+            else:
+                st.error("❌ Mật khẩu Admin không chính xác!")
+
+    elif target_type == "Kho Hàng Hủy":
+        st.warning("⚠️ Bạn đang yêu cầu: **XÓA SẠCH KHO HÀNG HỦY**.")
+        pwd_input = st.text_input("Nhập Mật khẩu Admin:", type="password", key="dlg_pwd_input_dis")
+        current_pass = get_setting('admin_password', '123456')
+        
+        col_act1, col_act2 = st.columns(2)
+        if col_act1.button("✅ Xác Nhận Xóa", type="primary", use_container_width=True):
+            if pwd_input == current_pass:
+                c = conn.cursor()
+                c.execute("DELETE FROM discarded_goods")
+                conn.commit()
+                conn.close()
+                st.success("🎉 Đã xóa sạch toàn bộ dữ liệu Kho Hàng Hủy!")
+                st.rerun()
+            else:
+                st.error("❌ Mật khẩu Admin không chính xác!")
+
+    conn.close()
 
     with st.expander("❓ Quên Mật Khẩu?"):
-        st.info("Nhập Mã Khôi Phục Hệ Thống để khôi phục về Pass mặc định")
+        st.info("Nhập Mã Khôi Phục Hệ Thống (`MECAKE-ADMIN-999`) để reset mật khẩu về `123456`.")
         rec_code = st.text_input("Mã Khôi Phục:", key="dlg_rec_inp")
-        if st.button("Reset Mật Khẩu"):
+        if st.button("Reset Mật Khẩu Về 123456"):
             if rec_code.strip() == RECOVERY_CODE:
-                set_admin_password("180711")
-                st.success("✅ Đã đặt lại Mật Khẩu Admin về mặc định")
+                set_setting('admin_password', "123456")
+                st.success("✅ Đã đặt lại Mật Khẩu Admin về mặc định: 123456")
                 st.rerun()
             else:
                 st.error("Mã khôi phục không đúng!")
@@ -225,7 +283,7 @@ if menu == "1. Soạn thảo & Nhập Order":
             else:
                 st.warning("Vui lòng nhập số lượng Order (> 0) cho ít nhất 1 loại bánh!")
 
-    # TAB 2: LỊCH SỬ, SỬA ĐƠN ORDER TRƯỚC KHIN HẬP KHO, XUẤT FILE VÀ CHUYỂN KHO
+    # TAB 2: LỊCH SỬ, SỬA ĐƠN ORDER TRƯỚC KHIN HẬP KHO
     with tab_history:
         st.header("📦 Quản Lý, Chỉnh Sửa & Xuất Đơn Order")
         
@@ -292,7 +350,6 @@ if menu == "1. Soạn thảo & Nhập Order":
             st.markdown("---")
             col_dl, col_del = st.columns(2)
             
-            # 1. Tải file Excel
             buffer = io.BytesIO()
             with pd.ExcelWriter(buffer, engine='openpyxl') as writer:
                 edited_order_df[['Mã Bánh', 'Tên Bánh', 'Giá Sỉ', 'Số Lượng Order', 'Thành Tiền']].to_excel(writer, index=False, sheet_name='Don_Order')
@@ -306,7 +363,6 @@ if menu == "1. Soạn thảo & Nhập Order":
                 use_container_width=True
             )
             
-            # 2. Xóa Đơn Order
             if col_del.button("🗑️ XÓA HOÀN TOÀN ĐƠN ORDER NÀY", type="secondary", use_container_width=True):
                 c = conn.cursor()
                 c.execute("DELETE FROM order_records WHERE order_date = ?", (selected_date_str,))
@@ -344,7 +400,7 @@ if menu == "1. Soạn thảo & Nhập Order":
     conn.close()
 
 # ---------------------------------------------------------
-# CHỨC NĂNG 2: BÁO CÁO TỒN KHO & CẢNH BÁO CẬN DATE / HỦY HÀNG
+# CHỨC NĂNG 2: BÁO CÁO TỒN KHO, CẢNH BÁO & TELEGRAM NOTIFIER
 # ---------------------------------------------------------
 elif menu == "2. Báo cáo Tồn Kho & Hạn Sử Dụng":
     tab_inv, tab_discard = st.tabs(["⏳ Tồn Kho & Cảnh Báo HSD", "🗑️ Kho Hàng Hủy & Báo Cáo Lãng Phí"])
@@ -354,11 +410,26 @@ elif menu == "2. Báo cáo Tồn Kho & Hạn Sử Dụng":
     with tab_inv:
         st.header("⏳ Kiểm Soát Tồn Kho & Hạn Sử Dụng Theo Thời Gian")
         
-        with st.expander("⚙️ CẤU HÌNH NGƯỠNG CẢNH BÁO & KHUYẾN CÁO BÁN HÀNG", expanded=False):
+        with st.expander("⚙️ CẤU HÌNH NGƯỠNG CẢNH BÁO & TELEGRAM NOTIFIER", expanded=False):
             c_cfg1, c_cfg2 = st.columns([1, 2])
             warn_days = c_cfg1.number_input("Cảnh báo cận Date khi số ngày còn lại ≤ (ngày):", min_value=1, value=2, step=1)
             discount_policy = c_cfg2.text_input("Nội dung Khuyến cáo bán hàng (Chiết khấu):", "Giảm giá 30% - 50% hoặc Tặng kèm Combo")
-        
+            
+            st.markdown("---")
+            st.subheader("📲 Cấu Hình Telegram Bot Notifier")
+            cur_token = get_setting('tele_token', '')
+            cur_chat_id = get_setting('tele_chat_id', '')
+            
+            col_t1, col_t2 = st.columns(2)
+            input_token = col_t1.text_input("Telegram Bot Token:", value=cur_token, type="password", key="inp_tele_token")
+            input_chat_id = col_t2.text_input("Telegram Chat ID:", value=cur_chat_id, key="inp_tele_chat_id")
+            
+            if st.button("💾 Lưu Cấu Hình Telegram"):
+                set_setting('tele_token', input_token.strip())
+                set_setting('tele_chat_id', input_chat_id.strip())
+                st.success("✅ Đã lưu cấu hình Telegram Bot!")
+                st.rerun()
+
         # ĐỌC TOÀN BỘ TỒN KHO ĐỂ LÀM CẢNH BÁO
         query_all = '''
             SELECT 
@@ -384,13 +455,41 @@ elif menu == "2. Báo cáo Tồn Kho & Hạn Sử Dụng":
             expired_df_all = df_batches_all[df_batches_all['Số Ngày Còn Lại'] < 0]
             warning_df_all = df_batches_all[(df_batches_all['Số Ngày Còn Lại'] >= 0) & (df_batches_all['Số Ngày Còn Lại'] <= warn_days)]
             
-            # 🔴 TẠO KHỐI CHI TIẾT CẢNH BÁO BÁNH HẾT HẠN
+            # NÚT BẤM GỬI CẢNH BÁO TELEGRAM NGAY
+            if st.button("📲 GỬI CẢNH BÁO TỚI TELEGRAM NGAY", type="primary"):
+                token_val = get_setting('tele_token', '')
+                chat_val = get_setting('tele_chat_id', '')
+                
+                msg_lines = [f"📣 *[MECAKE] BÁO CÁO CẢNH BÁO TỒN KHO* ({today.strftime('%d/%m/%Y')})\n"]
+                
+                if not expired_df_all.empty:
+                    msg_lines.append(f"🔴 *BÁNH ĐÃ HẾT HẠN ({len(expired_df_all)} LÔ):*")
+                    for _, exp_r in expired_df_all.iterrows():
+                        msg_lines.append(f"• `[{exp_r['Mã Bánh']}]` {exp_r['Tên Bánh']}\n  - Ngày nhập: {exp_r['Ngày Nhập']} | Tồn: *{exp_r['Số Lượng Tồn']} cái*\n  - Quá {abs(exp_r['Số Ngày Còn Lại'])} ngày (HSD: {exp_r['Hạn Sử Dụng']})")
+                    msg_lines.append("")
+                
+                if not warning_df_all.empty:
+                    msg_lines.append(f"🟡 *BÁNH CẬN DATE ({len(warning_df_all)} LÔ) - BÁN GẤP:*")
+                    for _, warn_r in warning_df_all.iterrows():
+                        msg_lines.append(f"• `[{warn_r['Mã Bánh']}]` {warn_r['Tên Bánh']}\n  - Ngày nhập: {warn_r['Ngày Nhập']} | Tồn: *{warn_r['Số Lượng Tồn']} cái*\n  - Còn *{warn_r['Số Ngày Còn Lại']} ngày HSD* (HSD: {warn_r['Hạn Sử Dụng']})")
+                    msg_lines.append(f"\n👉 *Khuyến cáo:* {discount_policy}")
+                
+                if expired_df_all.empty and warning_df_all.empty:
+                    msg_lines.append("🟢 Tất cả các lô bánh trong kho đều đang AN TOÀN!")
+
+                ok, resp = send_telegram_msg(token_val, chat_val, "\n".join(msg_lines))
+                if ok:
+                    st.success("✅ Đã gửi thành công tin nhắn Cảnh Báo tới Telegram điện thoại của bạn!")
+                else:
+                    st.error(f"❌ {resp}")
+
+            # 🔴 KHỐI CẢNH BÁO BÁNH HẾT HẠN
             if not expired_df_all.empty:
                 st.error(f"🚨 **ĐÃ CÓ {len(expired_df_all)} LÔ BÁNH HẾT HẠN SỬ DỤNG (CẦN HỦY GẤP):**")
                 for _, exp_r in expired_df_all.iterrows():
                     st.write(f"• 🔴 **[Mã: {exp_r['Mã Bánh']}]** - **{exp_r['Tên Bánh']}** | Ngày nhập kho: **{exp_r['Ngày Nhập']}** | Tồn kho: **{exp_r['Số Lượng Tồn']} cái** | ⚠️ HSD: {exp_r['Hạn Sử Dụng']} (**Quá {abs(exp_r['Số Ngày Còn Lại'])} ngày**)")
             
-            # 🟡 TẠO KHỐI CHI TIẾT CẢNH BÁO BÁNH CẬN DATE
+            # 🟡 KHỐI CẢNH BÁO BÁNH CẬN DATE
             if not warning_df_all.empty:
                 st.warning(f"⚠️ **ĐÃ CÓ {len(warning_df_all)} LÔ BÁNH CẬN DATE (CẦN BÁN GẤP):** 👉 **Khuyến cáo:** {discount_policy}")
                 for _, warn_r in warning_df_all.iterrows():
@@ -398,7 +497,6 @@ elif menu == "2. Báo cáo Tồn Kho & Hạn Sử Dụng":
             
             st.markdown("---")
 
-        # KHỐI TÌM KIẾM & BẢNG CHI TIẾT TỒN KHO
         st.subheader("🔍 Lọc & Tìm Kiếm Tồn Kho:")
         col_f1, col_f2 = st.columns([2, 1])
         filter_text = col_f1.text_input("Mã Bánh / Tên Bánh:", "", placeholder="Nhập mã hoặc tên bánh...")
@@ -505,8 +603,8 @@ elif menu == "2. Báo cáo Tồn Kho & Hạn Sử Dụng":
             st.info("Hiện chưa có lô hàng nào trong kho.")
 
         st.markdown("---")
-        with st.expander("🔒 QUẢN LÝ MẬT KHẨU & XÓA SẠCH DỮ LIỆU KHO (BẢO MẬT)", expanded=False):
-            current_pass = get_admin_password()
+        with st.expander("🔒 QUẢN LÝ MẬT KHẨU & XÓA DỮ LIỆU KHO (BẢO MẬT)", expanded=False):
+            current_pass = get_setting('admin_password', '123456')
             
             with st.expander("⚙️ Đổi Mật Khẩu Admin"):
                 c_p1, c_p2 = st.columns(2)
@@ -515,7 +613,7 @@ elif menu == "2. Báo cáo Tồn Kho & Hạn Sử Dụng":
                 if st.button("Lưu Mật Khẩu Mới"):
                     if old_p == current_pass:
                         if new_p.strip():
-                            set_admin_password(new_p.strip())
+                            set_setting('admin_password', new_p.strip())
                             st.success("✅ Đã đổi Mật khẩu Admin thành công!")
                         else:
                             st.warning("Mật khẩu mới không được để trống!")
@@ -524,7 +622,7 @@ elif menu == "2. Báo cáo Tồn Kho & Hạn Sử Dụng":
 
             col_clr_inv, col_clr_dis = st.columns(2)
             
-            if col_clr_inv.button("🔐 XÓA SẠCH TỒN KHO (RESET KHO VỀ 0)", type="primary", use_container_width=True):
+            if col_clr_inv.button("🔐 XÓA KHO THEO NGÀY NHẬP", type="primary", use_container_width=True):
                 confirm_delete_dialog("Tồn Kho")
 
             if col_clr_dis.button("🔐 XÓA SẠCH DỮ LIỆU KHO HÀNG HỦY", type="secondary", use_container_width=True):
